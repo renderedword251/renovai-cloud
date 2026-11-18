@@ -1,0 +1,1 @@
+{"name":"renovai-api","private":true,"version":"0.1.0","main":"dist/src/index.js","scripts":{"build":"tsc","start":"func start"},"dependencies":{"@azure/functions":"^4.6.0"},"devDependencies":{"typescript":"^5.7.2","@types/node":"^22.10.1"}}
