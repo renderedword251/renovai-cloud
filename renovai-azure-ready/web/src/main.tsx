@@ -13,16 +13,22 @@ type AuthResponse = {
 type AuthStatus = 'loading' | 'anonymous' | 'authenticated' | 'error';
 type Section = 'Dashboard' | 'Projects' | 'AI Studio' | 'Estimates' | 'Exports' | 'Settings';
 
-type LocalProject = {
+const projectTypes = ['New Home', 'Remodel', 'Addition', 'Interior'] as const;
+const projectStatuses = ['Concept', 'Draft', 'Planning'] as const;
+type ProjectStatus = typeof projectStatuses[number];
+type ProjectType = typeof projectTypes[number];
+
+type Project = {
   id: string;
   name: string;
-  type: string;
-  editedAt: string;
+  type: ProjectType;
+  status: ProjectStatus;
+  area?: number;
+  createdAt: string;
+  updatedAt: string;
 };
 
-const STORAGE_KEY = 'renovai.local-projects.v1';
 const sections: Section[] = ['Dashboard', 'Projects', 'AI Studio', 'Estimates', 'Exports', 'Settings'];
-const projectTypes = ['New Home', 'Remodel', 'Addition', 'Interior'] as const;
 const quickStarts = [
   {title: 'Blueprint', detail: 'AI generation not connected', icon: 'blueprint', action: 'AI Studio' as Section},
   {title: 'Remodel', detail: 'Create a local remodel draft', icon: 'remodel', action: 'Remodel' as const},
@@ -62,13 +68,46 @@ function displayName(userDetails: string) {
   return name.replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function isLocalProject(value: unknown): value is LocalProject {
-  if (!value || typeof value !== 'object') return false;
+function isProjectType(value: unknown): value is ProjectType {
+  return typeof value === 'string' && projectTypes.some((projectType) => projectType === value);
+}
+
+function isProjectStatus(value: unknown): value is ProjectStatus {
+  return typeof value === 'string' && projectStatuses.some((projectStatus) => projectStatus === value);
+}
+
+function isProject(value: unknown): value is Project {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const project = value as Record<string, unknown>;
   return typeof project.id === 'string'
     && typeof project.name === 'string'
-    && typeof project.type === 'string'
-    && typeof project.editedAt === 'string';
+    && isProjectType(project.type)
+    && isProjectStatus(project.status)
+    && typeof project.createdAt === 'string'
+    && Number.isFinite(Date.parse(project.createdAt))
+    && typeof project.updatedAt === 'string'
+    && Number.isFinite(Date.parse(project.updatedAt))
+    && (project.area === undefined || (typeof project.area === 'number' && Number.isFinite(project.area) && project.area > 0));
+}
+
+function isProjectsResponse(value: unknown): value is {projects: Project[]} {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const projects = (value as Record<string, unknown>).projects;
+  return Array.isArray(projects) && projects.every(isProject);
+}
+
+function getApiError(value: unknown): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const error = (value as Record<string, unknown>).error;
+  return typeof error === 'string' ? error : null;
+}
+
+async function readResponseJson(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
 }
 
 function AuthGate({error}: {error: boolean}) {
@@ -120,12 +159,14 @@ function Dashboard({userDetails}: {userDetails: string}) {
   const [projectFormOpen, setProjectFormOpen] = React.useState(false);
   const projectDialogRef = React.useRef<HTMLDialogElement>(null);
   const [projectName, setProjectName] = React.useState('');
-  const [projectType, setProjectType] = React.useState<string>(projectTypes[0]);
+  const [projectType, setProjectType] = React.useState<ProjectType>(projectTypes[0]);
   const [query, setQuery] = React.useState('');
   const [statusFilter, setStatusFilter] = React.useState('all');
-  const [projects, setProjects] = React.useState<LocalProject[]>([]);
+  const [projects, setProjects] = React.useState<Project[]>([]);
   const [projectsLoading, setProjectsLoading] = React.useState(true);
-  const [storageError, setStorageError] = React.useState('');
+  const [projectsError, setProjectsError] = React.useState('');
+  const [creatingProject, setCreatingProject] = React.useState(false);
+  const [projectFormError, setProjectFormError] = React.useState('');
   const [notice, setNotice] = React.useState('');
   const [projectNotice, setProjectNotice] = React.useState('');
   const [aiPrompt, setAiPrompt] = React.useState('');
@@ -137,36 +178,44 @@ function Dashboard({userDetails}: {userDetails: string}) {
     if (!projectFormOpen && dialog.open) dialog.close();
   }, [projectFormOpen]);
 
-  React.useEffect(() => {
+  const loadProjects = React.useCallback(async () => {
+    setProjectsLoading(true);
+    setProjectsError('');
     try {
-      const saved = window.localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed: unknown = JSON.parse(saved);
-        if (!Array.isArray(parsed) || !parsed.every(isLocalProject)) {
-          throw new Error('Saved project data has an unexpected format.');
-        }
-        setProjects(parsed);
+      const response = await fetch('/api/projects', {cache: 'no-store'});
+      const result = await readResponseJson(response);
+      if (!response.ok) {
+        throw new Error(getApiError(result) ?? `Projects API returned ${response.status}`);
       }
-    } catch {
-      setStorageError('Local projects couldn’t be read from this browser. Check your browser storage settings and reload.');
+      if (!isProjectsResponse(result)) {
+        throw new Error('Projects API returned an unexpected response.');
+      }
+      setProjects(result.projects);
+    } catch (error) {
+      setProjectsError(error instanceof Error ? error.message : 'Unable to load projects.');
     } finally {
       setProjectsLoading(false);
     }
   }, []);
+
+  React.useEffect(() => {
+    void loadProjects();
+  }, [loadProjects]);
 
   const name = displayName(userDetails);
   const greetingName = userDetails ? name.split(' ')[0] : 'there';
   const greeting = new Date().getHours() < 12 ? 'Good morning' : new Date().getHours() < 17 ? 'Good afternoon' : 'Good evening';
   const filteredProjects = projects.filter((project) => {
     const matchesQuery = `${project.name} ${project.type}`.toLowerCase().includes(query.trim().toLowerCase());
-    const matchesStatus = statusFilter === 'all' || statusFilter === 'draft';
+    const matchesStatus = statusFilter === 'all' || project.status.toLowerCase() === statusFilter;
     return matchesQuery && matchesStatus;
   });
 
-  function openProjectForm(type: string = projectTypes[0]) {
+  function openProjectForm(type: ProjectType = projectTypes[0]) {
     setActiveSection('Projects');
     setProjectType(type);
     setProjectNotice('');
+    setProjectFormError('');
     setProjectFormOpen(true);
     setNotice('');
   }
@@ -189,21 +238,38 @@ function Dashboard({userDetails}: {userDetails: string}) {
   function createProject(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmedName = projectName.trim();
-    if (!trimmedName) return;
-    const nextProjects = [
-      {id: `${Date.now()}`, name: trimmedName, type: projectType, editedAt: new Date().toISOString()},
-      ...projects,
-    ];
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextProjects));
-      setProjects(nextProjects);
-      setProjectName('');
-      setProjectFormOpen(false);
-      setStorageError('');
-      setNotice('Local draft created on this device. It isn’t synced to the cloud.');
-    } catch {
-      setStorageError('This browser couldn’t save your project. Check available storage and try again.');
-    }
+    if (!trimmedName || creatingProject) return;
+    setCreatingProject(true);
+    setProjectFormError('');
+    setProjectsError('');
+
+    void (async () => {
+      try {
+        const response = await fetch('/api/projects', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({name: trimmedName, type: projectType}),
+        });
+        const result = await readResponseJson(response);
+        if (!response.ok) {
+          throw new Error(getApiError(result) ?? `Projects API returned ${response.status}`);
+        }
+        if (!isProject(result)) {
+          throw new Error('Projects API returned an unexpected project.');
+        }
+        setProjects((current) => [result, ...current]);
+        setQuery('');
+        setStatusFilter('all');
+        setProjectName('');
+        setProjectType(projectTypes[0]);
+        setProjectFormOpen(false);
+        setNotice('Project created. Project storage is temporary while the API uses in-memory persistence.');
+      } catch (error) {
+        setProjectFormError(error instanceof Error ? error.message : 'Unable to create project.');
+      } finally {
+        setCreatingProject(false);
+      }
+    })();
   }
 
   const sectionDetails: Record<Exclude<Section, 'Dashboard' | 'Projects' | 'AI Studio'>, {description: string; icon: string}> = {
@@ -270,11 +336,13 @@ function Dashboard({userDetails}: {userDetails: string}) {
                 projects={filteredProjects}
                 total={projects.length}
                 loading={projectsLoading}
+                error={projectsError}
                 query={query}
                 statusFilter={statusFilter}
                 onQueryChange={setQuery}
                 onStatusChange={setStatusFilter}
                 onCreate={() => openProjectForm()}
+                onRetry={loadProjects}
               />
 
               <section className="quick-start-section" aria-labelledby="quick-start-title">
@@ -297,11 +365,13 @@ function Dashboard({userDetails}: {userDetails: string}) {
               projects={filteredProjects}
               total={projects.length}
               loading={projectsLoading}
+              error={projectsError}
               query={query}
               statusFilter={statusFilter}
               onQueryChange={setQuery}
               onStatusChange={setStatusFilter}
               onCreate={() => openProjectForm()}
+              onRetry={loadProjects}
               standalone
             />
           ) : activeSection === 'AI Studio' ? (
@@ -347,13 +417,13 @@ function Dashboard({userDetails}: {userDetails: string}) {
             {projectNotice && <p className="dialog-notice" role="status">{projectNotice}</p>}
             <form className="project-form" onSubmit={createProject}>
               <label htmlFor="project-name">Project name</label>
-              <input id="project-name" value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Kitchen Renovation" maxLength={70} required autoFocus />
-              <p className="local-storage-note">Projects are saved in this browser only. Cloud sync isn’t connected.</p>
-              <div className="form-actions"><button type="button" className="button button-secondary" onClick={() => setProjectFormOpen(false)}>Cancel</button><button type="submit" className="button button-primary"><Icon name="plus" size={17} /> Create local project</button></div>
+              <input id="project-name" value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Kitchen Renovation" maxLength={100} required autoFocus />
+              <p className="api-storage-note">Projects are stored in memory for now and may disappear when the API restarts.</p>
+              {projectFormError && <p className="inline-alert" role="alert">{projectFormError}</p>}
+              <div className="form-actions"><button type="button" className="button button-secondary" onClick={() => setProjectFormOpen(false)}>Cancel</button><button type="submit" className="button button-primary" disabled={creatingProject || !projectName.trim()}><Icon name="plus" size={17} /> {creatingProject ? 'Creating…' : 'Create Project'}</button></div>
             </form>
           </dialog>
 
-          {storageError && <p className="inline-alert" role="alert">{storageError}</p>}
           {notice && <p className="notice" role="status">{notice}</p>}
           <footer className="dashboard-footer"><span>RenovAI helps you explore possibilities—not replace professional advice.</span><a href="/logout">Sign out <Icon name="arrow" size={14} /></a></footer>
         </main>
@@ -366,27 +436,31 @@ function ProjectsSection({
   projects,
   total,
   loading,
+  error,
   query,
   statusFilter,
   onQueryChange,
   onStatusChange,
   onCreate,
+  onRetry,
   standalone = false,
 }: {
-  projects: LocalProject[];
+  projects: Project[];
   total: number;
   loading: boolean;
+  error: string;
   query: string;
   statusFilter: string;
   onQueryChange: (value: string) => void;
   onStatusChange: (value: string) => void;
   onCreate: () => void;
+  onRetry: () => void;
   standalone?: boolean;
 }) {
   return (
     <section className={`projects-section${standalone ? ' projects-standalone' : ''}`} id="projects" aria-labelledby="projects-title">
       <div className="section-heading projects-heading">
-        <div><h2 id="projects-title">{standalone ? 'Your projects' : 'Recent projects'}</h2><p>{total ? `${total} ${total === 1 ? 'local draft' : 'local drafts'} on this device` : 'Your home ideas will have a place here.'}</p></div>
+        <div><h2 id="projects-title">{standalone ? 'Your projects' : 'Recent projects'}</h2><p>{total ? `${total} ${total === 1 ? 'project' : 'projects'}` : 'Your home ideas will have a place here.'}</p></div>
         <button className="button button-tertiary" onClick={onCreate}><Icon name="plus" size={17} /> New project</button>
       </div>
       <div className="project-tools">
@@ -396,22 +470,28 @@ function ProjectsSection({
           <input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="Search projects" />
           {query && <button type="button" className="clear-search" onClick={() => onQueryChange('')} aria-label="Clear search"><Icon name="close" size={16} /></button>}
         </label>
-        <label className="filter-field"><span className="sr-only">Filter projects by status</span><select value={statusFilter} onChange={(event) => onStatusChange(event.target.value)}><option value="all">All statuses</option><option value="draft">Local drafts</option></select></label>
+        <label className="filter-field"><span className="sr-only">Filter projects by status</span><select value={statusFilter} onChange={(event) => onStatusChange(event.target.value)}><option value="all">All statuses</option>{projectStatuses.map((status) => <option value={status.toLowerCase()} key={status}>{status}</option>)}</select></label>
       </div>
-      {loading ? <div className="project-skeleton" role="status">Loading your local drafts…</div> : projects.length > 0 ? (
+      <p className="persistence-note">Projects are temporarily stored in API memory and may disappear when a Functions worker restarts.</p>
+      {loading ? <div className="project-skeleton" role="status">Loading your projects…</div> : error ? (
+        <div className="project-error" role="alert">
+          <div><strong>Projects couldn’t be loaded</strong><p>{error}</p></div>
+          <button className="button button-secondary" onClick={onRetry}>Try again</button>
+        </div>
+      ) : projects.length > 0 ? (
         <div className="projects-grid">
           {projects.map((project) => (
             <article className="project-card" key={project.id}>
               <div className="project-preview"><span className="preview-tag">NO BLUEPRINT YET</span><span className="preview-home"><Icon name="home" size={35} /></span><span className="preview-line preview-line-one" /><span className="preview-line preview-line-two" /></div>
               <div className="project-card-content">
-                <div className="project-title-row"><h3>{project.name}</h3><span className="status-pill">Draft</span></div>
+                <div className="project-title-row"><h3>{project.name}</h3><span className={`status-pill status-${project.status.toLowerCase()}`}>{project.status}</span></div>
                 <p className="project-type">{project.type}</p>
                 <dl className="project-details">
-                  <div className="project-detail"><dt>Est. area</dt><dd>Not estimated</dd></div>
+                  <div className="project-detail"><dt>Est. area</dt><dd>{project.area ? `${project.area.toLocaleString()} sq ft` : 'Not estimated'}</dd></div>
                   <div className="project-detail"><dt>Est. budget</dt><dd>Not estimated</dd></div>
                   <div className="project-detail"><dt>Collaborators</dt><dd>Not available</dd></div>
                 </dl>
-                <div className="project-meta"><span>Last edited</span><time dateTime={project.editedAt}>{new Date(project.editedAt).toLocaleString(undefined, {dateStyle: 'medium', timeStyle: 'short'})}</time></div>
+                <div className="project-meta"><span>Last modified</span><time dateTime={project.updatedAt}>{new Date(project.updatedAt).toLocaleString(undefined, {dateStyle: 'medium', timeStyle: 'short'})}</time></div>
               </div>
             </article>
           ))}
@@ -421,9 +501,9 @@ function ProjectsSection({
       ) : (
         <div className="empty-state">
           <span className="empty-icon"><Icon name="projects" size={23} /></span>
-          <h3>No projects yet</h3>
-          <p>Start a local draft to keep a renovation idea organized. It will stay in this browser until cloud projects are available.</p>
-          <button className="button button-primary" onClick={onCreate}><Icon name="plus" size={17} /> Create your first draft</button>
+          <h3>Your first design starts here</h3>
+          <p>Create a new home, remodeling project, addition, or interior project.</p>
+          <button className="button button-primary" onClick={onCreate}><Icon name="plus" size={17} /> New Project</button>
         </div>
       )}
     </section>

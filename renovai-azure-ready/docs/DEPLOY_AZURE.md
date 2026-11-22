@@ -56,5 +56,10 @@ Push to `main` to trigger `.github/workflows/azure-static-web-apps.yml`.
 ## Verify
 After GitHub Actions succeeds, open `/api/health`. It should return JSON containing `"status":"ok"`.
 
+## Projects API
+The authenticated dashboard uses `GET /api/projects` to list the signed-in user's projects and `POST /api/projects` to create one. Project ownership is taken from the Static Web Apps `x-ms-client-principal` header, not from client-supplied owner IDs.
+
+The current API stores projects in process memory for MVP contract validation only. Data can disappear when a Functions worker restarts and may not be shared across scaled-out workers. Do not rely on this storage for real projects; connect the API to durable storage such as Cosmos DB before production use.
+
 ## Later phases
-Add Azure OpenAI, project persistence, Blob Storage, invitations, collaboration, interactive blueprint editing, and cost estimation after the free web deployment is confirmed working.
+Replace in-memory project storage with durable persistence, then add Azure OpenAI, Blob Storage, invitations, collaboration, interactive blueprint editing, and cost estimation.
