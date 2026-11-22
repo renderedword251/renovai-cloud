@@ -22,11 +22,12 @@ type LocalProject = {
 
 const STORAGE_KEY = 'renovai.local-projects.v1';
 const sections: Section[] = ['Dashboard', 'Projects', 'AI Studio', 'Estimates', 'Exports', 'Settings'];
+const projectTypes = ['New Home', 'Remodel', 'Addition', 'Interior'] as const;
 const quickStarts = [
-  {title: 'AI Blueprint', detail: 'AI tools aren’t connected yet', icon: 'blueprint', action: 'AI Studio' as Section},
+  {title: 'Blueprint', detail: 'AI generation not connected', icon: 'blueprint', action: 'AI Studio' as Section},
   {title: 'Remodel', detail: 'Create a local remodel draft', icon: 'remodel', action: 'Remodel' as const},
-  {title: 'Estimate', detail: 'Cost estimates aren’t connected', icon: 'estimate', action: 'Estimates' as Section},
-  {title: 'Import', detail: 'Project import isn’t connected', icon: 'import', action: 'Import' as const},
+  {title: 'Estimate', detail: 'Cost estimates not connected', icon: 'estimate', action: 'Estimates' as Section},
+  {title: 'Import', detail: 'Plan imports not connected', icon: 'import', action: 'Import' as const},
 ];
 
 function Icon({name, size = 20}: {name: string; size?: number}) {
@@ -117,14 +118,24 @@ function Dashboard({userDetails}: {userDetails: string}) {
   const [activeSection, setActiveSection] = React.useState<Section>('Dashboard');
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
   const [projectFormOpen, setProjectFormOpen] = React.useState(false);
+  const projectDialogRef = React.useRef<HTMLDialogElement>(null);
   const [projectName, setProjectName] = React.useState('');
-  const [projectType, setProjectType] = React.useState('Home renovation');
+  const [projectType, setProjectType] = React.useState<string>(projectTypes[0]);
   const [query, setQuery] = React.useState('');
   const [statusFilter, setStatusFilter] = React.useState('all');
   const [projects, setProjects] = React.useState<LocalProject[]>([]);
   const [projectsLoading, setProjectsLoading] = React.useState(true);
   const [storageError, setStorageError] = React.useState('');
   const [notice, setNotice] = React.useState('');
+  const [projectNotice, setProjectNotice] = React.useState('');
+  const [aiPrompt, setAiPrompt] = React.useState('');
+
+  React.useEffect(() => {
+    const dialog = projectDialogRef.current;
+    if (!dialog) return;
+    if (projectFormOpen && !dialog.open) dialog.showModal();
+    if (!projectFormOpen && dialog.open) dialog.close();
+  }, [projectFormOpen]);
 
   React.useEffect(() => {
     try {
@@ -152,9 +163,10 @@ function Dashboard({userDetails}: {userDetails: string}) {
     return matchesQuery && matchesStatus;
   });
 
-  function openProjectForm(type = 'Home renovation') {
+  function openProjectForm(type: string = projectTypes[0]) {
     setActiveSection('Projects');
     setProjectType(type);
+    setProjectNotice('');
     setProjectFormOpen(true);
     setNotice('');
   }
@@ -194,8 +206,7 @@ function Dashboard({userDetails}: {userDetails: string}) {
     }
   }
 
-  const sectionDetails: Record<Exclude<Section, 'Dashboard' | 'Projects'>, {description: string; icon: string}> = {
-    'AI Studio': {description: 'AI blueprint and design tools aren’t connected to this deployment yet.', icon: 'studio'},
+  const sectionDetails: Record<Exclude<Section, 'Dashboard' | 'Projects' | 'AI Studio'>, {description: string; icon: string}> = {
     Estimates: {description: 'Cost estimates aren’t available yet. No pricing or estimate has been generated.', icon: 'estimate'},
     Exports: {description: 'There are no export tools connected yet.', icon: 'exports'},
     Settings: {description: 'Account settings aren’t available in this dashboard yet.', icon: 'settings'},
@@ -245,27 +256,13 @@ function Dashboard({userDetails}: {userDetails: string}) {
             <>
               <section className="welcome-row">
                 <div>
-                  <h1>{greeting}, {greetingName}.</h1>
-                  <p>Your next idea starts with a little space to think.</p>
+                  <span className="welcome-label">{greeting}</span>
+                  <h1>Welcome back, {greetingName}.</h1>
+                  <p>What would you like to design?</p>
                 </div>
                 <div className="welcome-actions">
-                  <button className="button button-secondary" onClick={() => chooseAction('AI Studio')}><Icon name="studio" size={17} /> Ask RenovAI</button>
+                  <button className="button button-ai" onClick={() => chooseAction('AI Studio')}><Icon name="studio" size={17} /> Ask RenovAI</button>
                   <button className="button button-primary" onClick={() => openProjectForm()}><Icon name="plus" size={18} /> New project</button>
-                </div>
-              </section>
-
-              <section className="quick-start-section" aria-labelledby="quick-start-title">
-                <div className="section-heading">
-                  <div><h2 id="quick-start-title">Quick start</h2><p>Choose a place to begin.</p></div>
-                </div>
-                <div className="quick-start-grid">
-                  {quickStarts.map((item) => (
-                    <button className="quick-start" key={item.title} onClick={() => chooseAction(item.action)}>
-                      <span className={`quick-icon quick-icon-${item.icon}`}><Icon name={item.icon} size={20} /></span>
-                      <span className="quick-copy"><strong>{item.title}</strong><span>{item.detail}</span></span>
-                      <Icon name="arrow" size={17} />
-                    </button>
-                  ))}
                 </div>
               </section>
 
@@ -279,6 +276,21 @@ function Dashboard({userDetails}: {userDetails: string}) {
                 onStatusChange={setStatusFilter}
                 onCreate={() => openProjectForm()}
               />
+
+              <section className="quick-start-section" aria-labelledby="quick-start-title">
+                <div className="section-heading">
+                  <div><h2 id="quick-start-title">Quick start</h2><p>Choose a starting point for your design.</p></div>
+                </div>
+                <div className="quick-start-grid">
+                  {quickStarts.map((item) => (
+                    <button className="quick-start" key={item.title} onClick={() => chooseAction(item.action)}>
+                      <span className={`quick-icon quick-icon-${item.icon}`}><Icon name={item.icon} size={20} /></span>
+                      <span className="quick-copy"><strong>{item.title}</strong><span>{item.detail}</span></span>
+                      <Icon name="arrow" size={17} />
+                    </button>
+                  ))}
+                </div>
+              </section>
             </>
           ) : activeSection === 'Projects' ? (
             <ProjectsSection
@@ -292,6 +304,21 @@ function Dashboard({userDetails}: {userDetails: string}) {
               onCreate={() => openProjectForm()}
               standalone
             />
+          ) : activeSection === 'AI Studio' ? (
+            <section className="ai-studio-panel">
+              <div className="ai-studio-heading">
+                <span className="ai-studio-icon"><Icon name="studio" size={23} /></span>
+                <div><h1>Ask RenovAI</h1><p>Shape the idea before you start a project.</p></div>
+              </div>
+              <div className="ai-prompt-card">
+                <label htmlFor="ai-prompt">What are you planning?</label>
+                <textarea id="ai-prompt" value={aiPrompt} onChange={(event) => setAiPrompt(event.target.value)} placeholder={'“Redesign my first floor with an open kitchen,\nmudroom and larger primary suite.”'} rows={4} />
+                <div className="ai-prompt-actions">
+                  <p id="ai-generation-status">AI generation isn’t connected yet. Your prompt stays in this browser and won’t be sent.</p>
+                  <button className="button button-ai" disabled aria-describedby="ai-generation-status"><Icon name="studio" size={17} /> Generate Concept</button>
+                </div>
+              </div>
+            </section>
           ) : (
             <section className="unavailable-panel">
               <span className="unavailable-icon"><Icon name={sectionDetails[activeSection].icon} size={24} /></span>
@@ -302,23 +329,29 @@ function Dashboard({userDetails}: {userDetails: string}) {
             </section>
           )}
 
-          {projectFormOpen && (
-            <section className="project-form-panel" aria-labelledby="create-project-heading">
-              <div className="form-panel-heading">
-                <div><h2 id="create-project-heading">Start a project draft</h2><p>Saved in this browser only. Cloud sync isn’t connected.</p></div>
-                <button className="icon-button" onClick={() => setProjectFormOpen(false)} aria-label="Close new project form"><Icon name="close" size={20} /></button>
-              </div>
-              <form className="project-form" onSubmit={createProject}>
-                <label htmlFor="project-name">Project name</label>
-                <input id="project-name" value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="e.g. Upstairs bathroom refresh" maxLength={70} required autoFocus />
-                <label htmlFor="project-type">Project type</label>
-                <select id="project-type" value={projectType} onChange={(event) => setProjectType(event.target.value)}>
-                  <option>Home renovation</option><option>Remodel</option><option>New home</option>
-                </select>
-                <div className="form-actions"><button type="button" className="button button-secondary" onClick={() => setProjectFormOpen(false)}>Cancel</button><button type="submit" className="button button-primary"><Icon name="plus" size={17} /> Create local draft</button></div>
-              </form>
-            </section>
-          )}
+          <dialog ref={projectDialogRef} className="project-dialog" aria-labelledby="create-project-heading" onClose={() => setProjectFormOpen(false)} onCancel={() => setProjectFormOpen(false)} onClick={(event) => {
+            if (event.target === event.currentTarget) setProjectFormOpen(false);
+          }}>
+            <div className="dialog-heading">
+              <div><h2 id="create-project-heading">New RenovAI Project</h2><p>What are you planning?</p></div>
+              <button className="icon-button" onClick={() => setProjectFormOpen(false)} aria-label="Close new project form"><Icon name="close" size={20} /></button>
+            </div>
+            <div className="project-type-grid" role="group" aria-label="Project type">
+              {projectTypes.map((type) => (
+                <button type="button" key={type} className={`project-type-option${projectType === type ? ' project-type-selected' : ''}`} aria-pressed={projectType === type} onClick={() => setProjectType(type)}>{type}</button>
+              ))}
+            </div>
+            <button type="button" className="import-plan-button" onClick={() => setProjectNotice('Plan import isn’t connected yet. No files have been selected or uploaded.')}>
+              <Icon name="import" size={18} /> Import Existing Plan
+            </button>
+            {projectNotice && <p className="dialog-notice" role="status">{projectNotice}</p>}
+            <form className="project-form" onSubmit={createProject}>
+              <label htmlFor="project-name">Project name</label>
+              <input id="project-name" value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Kitchen Renovation" maxLength={70} required autoFocus />
+              <p className="local-storage-note">Projects are saved in this browser only. Cloud sync isn’t connected.</p>
+              <div className="form-actions"><button type="button" className="button button-secondary" onClick={() => setProjectFormOpen(false)}>Cancel</button><button type="submit" className="button button-primary"><Icon name="plus" size={17} /> Create local project</button></div>
+            </form>
+          </dialog>
 
           {storageError && <p className="inline-alert" role="alert">{storageError}</p>}
           {notice && <p className="notice" role="status">{notice}</p>}
@@ -353,7 +386,7 @@ function ProjectsSection({
   return (
     <section className={`projects-section${standalone ? ' projects-standalone' : ''}`} id="projects" aria-labelledby="projects-title">
       <div className="section-heading projects-heading">
-        <div><h2 id="projects-title">Your projects</h2><p>{total ? `${total} ${total === 1 ? 'local draft' : 'local drafts'} on this device` : 'Your home ideas will have a place here.'}</p></div>
+        <div><h2 id="projects-title">{standalone ? 'Your projects' : 'Recent projects'}</h2><p>{total ? `${total} ${total === 1 ? 'local draft' : 'local drafts'} on this device` : 'Your home ideas will have a place here.'}</p></div>
         <button className="button button-tertiary" onClick={onCreate}><Icon name="plus" size={17} /> New project</button>
       </div>
       <div className="project-tools">
@@ -369,10 +402,15 @@ function ProjectsSection({
         <div className="projects-grid">
           {projects.map((project) => (
             <article className="project-card" key={project.id}>
-              <div className="project-preview"><span className="preview-tag">LOCAL DRAFT</span><span className="preview-home"><Icon name="home" size={35} /></span><span className="preview-line preview-line-one" /><span className="preview-line preview-line-two" /></div>
+              <div className="project-preview"><span className="preview-tag">NO BLUEPRINT YET</span><span className="preview-home"><Icon name="home" size={35} /></span><span className="preview-line preview-line-one" /><span className="preview-line preview-line-two" /></div>
               <div className="project-card-content">
                 <div className="project-title-row"><h3>{project.name}</h3><span className="status-pill">Draft</span></div>
                 <p className="project-type">{project.type}</p>
+                <dl className="project-details">
+                  <div className="project-detail"><dt>Est. area</dt><dd>Not estimated</dd></div>
+                  <div className="project-detail"><dt>Est. budget</dt><dd>Not estimated</dd></div>
+                  <div className="project-detail"><dt>Collaborators</dt><dd>Not available</dd></div>
+                </dl>
                 <div className="project-meta"><span>Last edited</span><time dateTime={project.editedAt}>{new Date(project.editedAt).toLocaleString(undefined, {dateStyle: 'medium', timeStyle: 'short'})}</time></div>
               </div>
             </article>
